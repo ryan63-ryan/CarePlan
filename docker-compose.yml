@@ -7,6 +7,7 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     volumes:
       - ./backend:/app
+      - ./backend/logs:/app/logs
 
   frontend:
     build: ./frontend

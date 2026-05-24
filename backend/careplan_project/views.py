@@ -1,4 +1,5 @@
 import json
+import logging
 import uuid
 
 from django.conf import settings
@@ -6,6 +7,8 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from anthropic import Anthropic
+
+logger = logging.getLogger(__name__)
 
 ORDERS = {}
 
@@ -36,7 +39,14 @@ Write the care plan now."""
 @csrf_exempt
 @require_http_methods(["POST"])
 def create_order(request):
+    logger.info("received request")
     data = json.loads(request.body)
+    logger.info(
+        "parsed payload: patient=%s %s, medication=%s",
+        data.get("firstName"),
+        data.get("lastName"),
+        data.get("medication"),
+    )
 
     prompt = PROMPT_TEMPLATE.format(
         first_name=data.get("firstName", ""),
@@ -51,12 +61,19 @@ def create_order(request):
         patient_records=data.get("patientRecords", ""),
     )
 
+    logger.info("calling Anthropic API (prompt length=%d chars)...", len(prompt))
     message = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=2000,
         messages=[{"role": "user", "content": prompt}],
     )
     care_plan = message.content[0].text
+    logger.info(
+        "LLM returned: %d chars, stop_reason=%s, usage=%s",
+        len(care_plan),
+        message.stop_reason,
+        message.usage,
+    )
 
     order_id = str(uuid.uuid4())
     ORDERS[order_id] = {
@@ -65,4 +82,5 @@ def create_order(request):
         "carePlan": care_plan,
         "status": "completed",
     }
+    logger.info("stored order %s, returning response", order_id)
     return JsonResponse(ORDERS[order_id])

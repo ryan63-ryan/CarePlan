@@ -18,3 +18,7 @@ dist/
 Thumbs.db
 .idea/
 .vscode/
+
+# Logs
+backend/logs/*
+!backend/logs/.gitkeep
