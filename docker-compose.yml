@@ -16,6 +16,12 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
   backend:
     build: ./backend
     restart: unless-stopped
@@ -28,12 +34,16 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-careplan}
       - POSTGRES_HOST=db
       - POSTGRES_PORT=5432
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     volumes:
       - ./backend:/app
       - ./backend/logs:/app/logs
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_started
 
   frontend:
     build: ./frontend

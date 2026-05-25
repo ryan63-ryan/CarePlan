@@ -6,12 +6,16 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from anthropic import Anthropic
+import redis
 
 from core.models import Patient, Provider, Order, CarePlan
 
 logger = logging.getLogger(__name__)
 
+# 注意: 同步调 LLM 已移出 create_order, client 和 PROMPT_TEMPLATE 暂时未使用,
+# 留给下一步要写的后台 worker。
 client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+redis_client = redis.Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, decode_responses=True)
 
 PROMPT_TEMPLATE = """You are a clinical pharmacist at a specialty pharmacy. Generate a care plan
 for the patient below. The care plan MUST contain exactly these four sections,
@@ -47,33 +51,6 @@ def create_order(request):
         data.get("medication"),
     )
 
-    prompt = PROMPT_TEMPLATE.format(
-        first_name=data.get("firstName", ""),
-        last_name=data.get("lastName", ""),
-        mrn=data.get("mrn", ""),
-        provider=data.get("provider", ""),
-        npi=data.get("npi", ""),
-        diagnosis=data.get("diagnosis", ""),
-        medication=data.get("medication", ""),
-        additional_diagnosis=data.get("additionalDiagnosis", ""),
-        medication_history=data.get("medicationHistory", ""),
-        patient_records=data.get("patientRecords", ""),
-    )
-
-    logger.info("calling Anthropic API (prompt length=%d chars)...", len(prompt))
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=2000,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    care_plan = message.content[0].text
-    logger.info(
-        "LLM returned: %d chars, stop_reason=%s, usage=%s",
-        len(care_plan),
-        message.stop_reason,
-        message.usage,
-    )
-
     # 按 MRN / NPI 复用已存在的病人 / 医生, 不重复创建。
     patient, _ = Patient.objects.get_or_create(
         mrn=data.get("mrn", ""),
@@ -95,18 +72,20 @@ def create_order(request):
         medication_history=data.get("medicationHistory", ""),
         patient_records=data.get("patientRecords", ""),
     )
+    # 还没生成 care plan: 先建一条 pending 记录 (内容留空), 实际生成交给后台 worker。
     care_plan_obj = CarePlan.objects.create(
         order=order,
-        content=care_plan,
-        status=CarePlan.Status.COMPLETED,
+        status=CarePlan.Status.PENDING,
     )
 
-    logger.info("stored order %s, returning response", order.id)
+    # 把 care plan id 推进 Redis 队列, 立刻返回, 不在请求里同步调 LLM。
+    redis_client.rpush(settings.CAREPLAN_QUEUE, care_plan_obj.id)
+    logger.info("enqueued care plan %s (status=pending)", care_plan_obj.id)
+
     return JsonResponse({
-        "id": order.id,
-        "patient": data,
-        "carePlan": care_plan,
+        "carePlanId": care_plan_obj.id,
         "status": care_plan_obj.status,
+        "message": "received",
     })
 
 
