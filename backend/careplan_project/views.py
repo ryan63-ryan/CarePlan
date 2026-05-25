@@ -1,6 +1,5 @@
 import json
 import logging
-import uuid
 
 from django.conf import settings
 from django.http import JsonResponse
@@ -8,9 +7,9 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from anthropic import Anthropic
 
-logger = logging.getLogger(__name__)
+from core.models import Patient, Provider, Order, CarePlan
 
-ORDERS = {}
+logger = logging.getLogger(__name__)
 
 client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
@@ -75,12 +74,59 @@ def create_order(request):
         message.usage,
     )
 
-    order_id = str(uuid.uuid4())
-    ORDERS[order_id] = {
-        "id": order_id,
+    # 按 MRN / NPI 复用已存在的病人 / 医生, 不重复创建。
+    patient, _ = Patient.objects.get_or_create(
+        mrn=data.get("mrn", ""),
+        defaults={
+            "first_name": data.get("firstName", ""),
+            "last_name": data.get("lastName", ""),
+        },
+    )
+    provider, _ = Provider.objects.get_or_create(
+        npi=data.get("npi", ""),
+        defaults={"name": data.get("provider", "")},
+    )
+    order = Order.objects.create(
+        patient=patient,
+        provider=provider,
+        medication=data.get("medication", ""),
+        primary_diagnosis=data.get("diagnosis", ""),
+        additional_diagnosis=data.get("additionalDiagnosis", ""),
+        medication_history=data.get("medicationHistory", ""),
+        patient_records=data.get("patientRecords", ""),
+    )
+    care_plan_obj = CarePlan.objects.create(
+        order=order,
+        content=care_plan,
+        status=CarePlan.Status.COMPLETED,
+    )
+
+    logger.info("stored order %s, returning response", order.id)
+    return JsonResponse({
+        "id": order.id,
         "patient": data,
         "carePlan": care_plan,
-        "status": "completed",
-    }
-    logger.info("stored order %s, returning response", order_id)
-    return JsonResponse(ORDERS[order_id])
+        "status": care_plan_obj.status,
+    })
+
+
+@require_http_methods(["GET"])
+def get_order(request, order_id):
+    order = Order.objects.select_related("patient", "provider", "care_plan").get(id=order_id)
+    return JsonResponse({
+        "id": order.id,
+        "patient": {
+            "firstName": order.patient.first_name,
+            "lastName": order.patient.last_name,
+            "mrn": order.patient.mrn,
+            "provider": order.provider.name,
+            "npi": order.provider.npi,
+            "diagnosis": order.primary_diagnosis,
+            "medication": order.medication,
+            "additionalDiagnosis": order.additional_diagnosis,
+            "medicationHistory": order.medication_history,
+            "patientRecords": order.patient_records,
+        },
+        "carePlan": order.care_plan.content,
+        "status": order.care_plan.status,
+    })
