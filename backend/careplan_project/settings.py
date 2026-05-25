@@ -4,13 +4,22 @@ SECRET_KEY = "dev-only-not-secure"
 DEBUG = True
 ALLOWED_HOSTS = ["*"]
 
-INSTALLED_APPS = []
+INSTALLED_APPS = ["core"]
 MIDDLEWARE = ["django.middleware.common.CommonMiddleware"]
 
 ROOT_URLCONF = "careplan_project.urls"
 WSGI_APPLICATION = "careplan_project.wsgi.application"
 
-DATABASES = {}
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.environ.get("POSTGRES_DB", "careplan"),
+        "USER": os.environ.get("POSTGRES_USER", "careplan"),
+        "PASSWORD": os.environ.get("POSTGRES_PASSWORD", "careplan"),
+        "HOST": os.environ.get("POSTGRES_HOST", "db"),
+        "PORT": os.environ.get("POSTGRES_PORT", "5432"),
+    }
+}
 TEMPLATES = []
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
