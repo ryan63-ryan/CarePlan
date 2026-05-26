@@ -45,6 +45,28 @@ services:
       redis:
         condition: service_started
 
+  celery_worker:
+    build: ./backend
+    restart: unless-stopped
+    command: celery -A careplan_project worker --loglevel=info
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - POSTGRES_DB=${POSTGRES_DB:-careplan}
+      - POSTGRES_USER=${POSTGRES_USER:-careplan}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-careplan}
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    volumes:
+      - ./backend:/app
+      - ./backend/logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
   frontend:
     build: ./frontend
     restart: unless-stopped

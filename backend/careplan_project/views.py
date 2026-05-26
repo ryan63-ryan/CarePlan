@@ -6,16 +6,13 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from anthropic import Anthropic
-import redis
 
 from core.models import Patient, Provider, Order, CarePlan
 
 logger = logging.getLogger(__name__)
 
-# 注意: 同步调 LLM 已移出 create_order, client 和 PROMPT_TEMPLATE 暂时未使用,
-# 留给下一步要写的后台 worker。
+# client 和 PROMPT_TEMPLATE 现在被 Celery 任务 (core/tasks.py) 复用。
 client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-redis_client = redis.Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, decode_responses=True)
 
 PROMPT_TEMPLATE = """You are a clinical pharmacist at a specialty pharmacy. Generate a care plan
 for the patient below. The care plan MUST contain exactly these four sections,
@@ -78,9 +75,10 @@ def create_order(request):
         status=CarePlan.Status.PENDING,
     )
 
-    # 把 care plan id 推进 Redis 队列, 立刻返回, 不在请求里同步调 LLM。
-    redis_client.rpush(settings.CAREPLAN_QUEUE, care_plan_obj.id)
-    logger.info("enqueued care plan %s (status=pending)", care_plan_obj.id)
+    # 触发 Celery 异步任务,把任务丢进 broker 后立刻返回
+    from core.tasks import generate_care_plan
+    generate_care_plan.delay(care_plan_obj.id)
+    logger.info("enqueued care plan %s via celery (status=pending)", care_plan_obj.id)
 
     return JsonResponse({
         "carePlanId": care_plan_obj.id,

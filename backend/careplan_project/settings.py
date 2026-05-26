@@ -26,7 +26,11 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 REDIS_HOST = os.environ.get("REDIS_HOST", "redis")
 REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
-CAREPLAN_QUEUE = "careplan:pending"
+CAREPLAN_QUEUE = "careplan:pending"  # 手写 worker 时代的队列名, 改用 Celery 后不再用
+
+# Celery: 复用同一台 Redis, broker 用 db 0, 结果后端用 db 1。
+CELERY_BROKER_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
+CELERY_RESULT_BACKEND = f"redis://{REDIS_HOST}:{REDIS_PORT}/1"
 
 LOGGING = {
     "version": 1,
