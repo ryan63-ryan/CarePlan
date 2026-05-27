@@ -88,6 +88,24 @@ def create_order(request):
 
 
 @require_http_methods(["GET"])
+def get_care_plan_status(request, care_plan_id):
+    # 前端轮询用: 拿 POST /api/orders/ 返回的 carePlanId 每隔几秒查一次状态。
+    try:
+        care_plan = CarePlan.objects.get(id=care_plan_id)
+    except CarePlan.DoesNotExist:
+        return JsonResponse({"error": "care plan not found"}, status=404)
+
+    payload = {
+        "carePlanId": care_plan.id,
+        "status": care_plan.status,
+    }
+    # 只有 completed 才带正文; pending/processing/failed 时 content 还是空的, 不必返回。
+    if care_plan.status == CarePlan.Status.COMPLETED:
+        payload["content"] = care_plan.content
+    return JsonResponse(payload)
+
+
+@require_http_methods(["GET"])
 def get_order(request, order_id):
     order = Order.objects.select_related("patient", "provider", "care_plan").get(id=order_id)
     return JsonResponse({
