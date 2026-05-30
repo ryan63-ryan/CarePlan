@@ -60,5 +60,12 @@ LOGGING = {
             "level": "INFO",
             "propagate": False,
         },
+        # core app (serializers / services / tasks) 的日志也输出到同样的地方,
+        # 否则 STEP ③/④ 这些 logger.info 不会显示。
+        "core": {
+            "handlers": ["console", "file"],
+            "level": "INFO",
+            "propagate": False,
+        },
     },
 }
