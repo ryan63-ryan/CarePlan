@@ -6,11 +6,25 @@ task、management command、测试任意复用。
 import logging
 
 from django.conf import settings
+from django.utils import timezone
 from anthropic import Anthropic
 
 from core.models import Patient, Provider, Order, CarePlan
 
 logger = logging.getLogger(__name__)
+
+
+# 重复检测用的两个简单异常 (之后会有专门的 class 统一处理, 现在先裸抛):
+#   DuplicateError   -> 必须阻止, 无论如何都不能继续。
+#   DuplicateWarning -> 警告, 用户传 confirm=True 可跳过。
+class DuplicateError(Exception):
+    """硬阻止: 检测到不允许的重复, 必须中断。"""
+    pass
+
+
+class DuplicateWarning(Exception):
+    """软警告: 疑似重复, confirm=True 时可忽略并继续。"""
+    pass
 
 # Anthropic client 和 prompt 模板, 被 Celery 任务 (core/tasks.py) 复用。
 client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
@@ -37,8 +51,12 @@ Patient information:
 Write the care plan now."""
 
 
-def create_order(data):
-    """建订单 + 触发异步生成 care plan。data 是已转换好的后端字段 dict。"""
+def create_order(data, confirm=False):
+    """建订单 + 触发异步生成 care plan。data 是已转换好的后端字段 dict。
+
+    confirm=True 时跳过所有 DuplicateWarning (软警告), 但 DuplicateError
+    (硬阻止) 无论如何都会抛出。
+    """
     logger.info(
         "parsed payload: patient=%s %s, medication=%s",
         data["first_name"],
@@ -46,18 +64,123 @@ def create_order(data):
         data["medication"],
     )
 
-    # 按 MRN / NPI 复用已存在的病人 / 医生, 不重复创建。
-    patient, _ = Patient.objects.get_or_create(
-        mrn=data["mrn"],
-        defaults={
-            "first_name": data["first_name"],
-            "last_name": data["last_name"],
-        },
+    # ------------------------------------------------------------------
+    # Provider 重复检测 (NPI 全国唯一)。
+    # ------------------------------------------------------------------
+    existing_provider = Provider.objects.filter(npi=data["npi"]).first()
+    if existing_provider is not None:
+        if existing_provider.name == data["provider_name"]:
+            # NPI 相同 + 名字相同 -> 复用现有。
+            provider = existing_provider
+            logger.info("provider duplicate: reusing existing NPI %s", data["npi"])
+        else:
+            # NPI 相同 + 名字不同 -> 必须阻止 (同一个执照号不可能是两个人)。
+            raise DuplicateError(
+                "NPI %s already belongs to '%s', cannot register it under '%s'"
+                % (data["npi"], existing_provider.name, data["provider_name"])
+            )
+    else:
+        provider = Provider.objects.create(
+            npi=data["npi"],
+            name=data["provider_name"],
+        )
+
+    # ------------------------------------------------------------------
+    # Patient 重复检测 (MRN 唯一, 同时也看 名字+DOB 的身份匹配)。
+    # ------------------------------------------------------------------
+    dob = data.get("dob")
+    existing_by_mrn = Patient.objects.filter(mrn=data["mrn"]).first()
+    if existing_by_mrn is not None:
+        same_name = (
+            existing_by_mrn.first_name == data["first_name"]
+            and existing_by_mrn.last_name == data["last_name"]
+        )
+        same_dob = existing_by_mrn.dob == dob
+        if same_name and same_dob:
+            # MRN 相同 + 名字和 DOB 都相同 -> 复用现有。
+            patient = existing_by_mrn
+            logger.info("patient duplicate: reusing existing MRN %s", data["mrn"])
+        else:
+            # MRN 相同 + 名字或 DOB 不同 -> 警告 (可能录错, 也可能 MRN 撞号)。
+            if not confirm:
+                raise DuplicateWarning(
+                    "MRN %s already exists as '%s %s' (dob=%s); "
+                    "incoming '%s %s' (dob=%s) does not match"
+                    % (
+                        data["mrn"],
+                        existing_by_mrn.first_name,
+                        existing_by_mrn.last_name,
+                        existing_by_mrn.dob,
+                        data["first_name"],
+                        data["last_name"],
+                        dob,
+                    )
+                )
+            # confirm=True: MRN 唯一, 无法再建一条同号, 只能复用这条记录。
+            patient = existing_by_mrn
+            logger.warning("patient duplicate (MRN mismatch) bypassed via confirm=True")
+    else:
+        # MRN 不存在, 再看是否有 名字+DOB 相同但 MRN 不同的病人。
+        existing_by_identity = Patient.objects.filter(
+            first_name=data["first_name"],
+            last_name=data["last_name"],
+            dob=dob,
+        ).first()
+        if existing_by_identity is not None:
+            # 名字+DOB 相同 + MRN 不同 -> 警告 (疑似同一人用了两个 MRN)。
+            if not confirm:
+                raise DuplicateWarning(
+                    "patient '%s %s' (dob=%s) already exists under MRN %s; "
+                    "incoming MRN %s is different"
+                    % (
+                        data["first_name"],
+                        data["last_name"],
+                        dob,
+                        existing_by_identity.mrn,
+                        data["mrn"],
+                    )
+                )
+            logger.warning("patient duplicate (identity match) bypassed via confirm=True")
+        patient = Patient.objects.create(
+            mrn=data["mrn"],
+            first_name=data["first_name"],
+            last_name=data["last_name"],
+            dob=dob,
+        )
+
+    # ------------------------------------------------------------------
+    # Order 重复检测 (同患者 + 同药物)。
+    # ------------------------------------------------------------------
+    today = timezone.now().date()
+    same_day_order = Order.objects.filter(
+        patient=patient,
+        medication=data["medication"],
+        created_at__date=today,
+    ).first()
+    if same_day_order is not None:
+        # 同一患者 + 同一药物 + 同一天 -> 必须阻止 (重复下单)。
+        raise DuplicateError(
+            "order for '%s' on patient MRN %s already placed today (order #%s)"
+            % (data["medication"], patient.mrn, same_day_order.pk)
+        )
+    prior_order = (
+        Order.objects.filter(patient=patient, medication=data["medication"])
+        .exclude(created_at__date=today)
+        .order_by("-created_at")
+        .first()
     )
-    provider, _ = Provider.objects.get_or_create(
-        npi=data["npi"],
-        defaults={"name": data["provider_name"]},
-    )
+    if prior_order is not None and not confirm:
+        # 同一患者 + 同一药物 + 不同天 -> 警告 (confirm=True 跳过)。
+        raise DuplicateWarning(
+            "patient MRN %s previously ordered '%s' on %s (order #%s)"
+            % (
+                patient.mrn,
+                data["medication"],
+                prior_order.created_at.date(),
+                prior_order.pk,
+            )
+        )
+
     order = Order.objects.create(
         patient=patient,
         provider=provider,

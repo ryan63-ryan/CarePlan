@@ -17,7 +17,18 @@ def create_order(request):
     logger.info("received request")
     data = json.loads(request.body)
     parsed = serializers.parse_order_input(data)
-    care_plan = services.create_order(parsed)
+    confirm = data.get("confirm", False)
+    try:
+        care_plan = services.create_order(parsed, confirm=confirm)
+    except services.DuplicateError as e:
+        # 硬阻止: NPI 撞名 / 当天重复下单 -> 409 Conflict, key 用 "error"。
+        return JsonResponse({"error": str(e)}, status=409)
+    except services.DuplicateWarning as e:
+        # 软警告: 疑似重复, 让前端带 confirm=true 再发一次。这里用 400 + "warning"。
+        return JsonResponse(
+            {"warning": str(e), "needs_confirm": True},
+            status=400,
+        )
     return JsonResponse(serializers.serialize_create_response(care_plan))
 
 
