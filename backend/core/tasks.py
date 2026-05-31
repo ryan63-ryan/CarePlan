@@ -4,8 +4,10 @@ from celery import shared_task
 from celery.exceptions import MaxRetriesExceededError
 
 from core.models import CarePlan
-# 复用 views.py 里已经建好的 Anthropic client 和 prompt 模板。
-from careplan_project.views import client, PROMPT_TEMPLATE
+# 复用 services.py 里已经建好的 Anthropic client 和 prompt 模板。
+# (restructure 时 client/PROMPT_TEMPLATE 从 views.py 挪到了 services.py,
+#  这里的 import 路径之前没跟着改 -> 修正。)
+from core.services import client, PROMPT_TEMPLATE
 
 logger = logging.getLogger("careplan_project")
 
