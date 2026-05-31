@@ -10,21 +10,10 @@ from django.utils import timezone
 from anthropic import Anthropic
 
 from core.models import Patient, Provider, Order, CarePlan
+# 重复检测异常: 只管 raise, 统一格式由 core/middleware.py 处理。
+from core.exceptions import DuplicateBlockedException, DuplicateWarningException
 
 logger = logging.getLogger(__name__)
-
-
-# 重复检测用的两个简单异常 (之后会有专门的 class 统一处理, 现在先裸抛):
-#   DuplicateError   -> 必须阻止, 无论如何都不能继续。
-#   DuplicateWarning -> 警告, 用户传 confirm=True 可跳过。
-class DuplicateError(Exception):
-    """硬阻止: 检测到不允许的重复, 必须中断。"""
-    pass
-
-
-class DuplicateWarning(Exception):
-    """软警告: 疑似重复, confirm=True 时可忽略并继续。"""
-    pass
 
 # Anthropic client 和 prompt 模板, 被 Celery 任务 (core/tasks.py) 复用。
 client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
@@ -54,8 +43,8 @@ Write the care plan now."""
 def create_order(data, confirm=False):
     """建订单 + 触发异步生成 care plan。data 是已转换好的后端字段 dict。
 
-    confirm=True 时跳过所有 DuplicateWarning (软警告), 但 DuplicateError
-    (硬阻止) 无论如何都会抛出。
+    confirm=True 时跳过所有 DuplicateWarningException (软警告), 但
+    DuplicateBlockedException (硬阻止) 无论如何都会抛出。
     """
     logger.info(
         "parsed payload: patient=%s %s, medication=%s",
@@ -75,7 +64,7 @@ def create_order(data, confirm=False):
             logger.info("provider duplicate: reusing existing NPI %s", data["npi"])
         else:
             # NPI 相同 + 名字不同 -> 必须阻止 (同一个执照号不可能是两个人)。
-            raise DuplicateError(
+            raise DuplicateBlockedException(
                 "NPI %s already belongs to '%s', cannot register it under '%s'"
                 % (data["npi"], existing_provider.name, data["provider_name"])
             )
@@ -103,7 +92,7 @@ def create_order(data, confirm=False):
         else:
             # MRN 相同 + 名字或 DOB 不同 -> 警告 (可能录错, 也可能 MRN 撞号)。
             if not confirm:
-                raise DuplicateWarning(
+                raise DuplicateWarningException(
                     "MRN %s already exists as '%s %s' (dob=%s); "
                     "incoming '%s %s' (dob=%s) does not match"
                     % (
@@ -129,7 +118,7 @@ def create_order(data, confirm=False):
         if existing_by_identity is not None:
             # 名字+DOB 相同 + MRN 不同 -> 警告 (疑似同一人用了两个 MRN)。
             if not confirm:
-                raise DuplicateWarning(
+                raise DuplicateWarningException(
                     "patient '%s %s' (dob=%s) already exists under MRN %s; "
                     "incoming MRN %s is different"
                     % (
@@ -159,7 +148,7 @@ def create_order(data, confirm=False):
     ).first()
     if same_day_order is not None:
         # 同一患者 + 同一药物 + 同一天 -> 必须阻止 (重复下单)。
-        raise DuplicateError(
+        raise DuplicateBlockedException(
             "order for '%s' on patient MRN %s already placed today (order #%s)"
             % (data["medication"], patient.mrn, same_day_order.pk)
         )
@@ -171,7 +160,7 @@ def create_order(data, confirm=False):
     )
     if prior_order is not None and not confirm:
         # 同一患者 + 同一药物 + 不同天 -> 警告 (confirm=True 跳过)。
-        raise DuplicateWarning(
+        raise DuplicateWarningException(
             "patient MRN %s previously ordered '%s' on %s (order #%s)"
             % (
                 patient.mrn,

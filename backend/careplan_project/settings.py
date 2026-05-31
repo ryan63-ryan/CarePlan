@@ -5,7 +5,11 @@ DEBUG = True
 ALLOWED_HOSTS = ["*"]
 
 INSTALLED_APPS = ["core"]
-MIDDLEWARE = ["django.middleware.common.CommonMiddleware"]
+MIDDLEWARE = [
+    "django.middleware.common.CommonMiddleware",
+    # 统一异常处理 (Day 8): service/view 里 raise 的自定义异常在这里转成统一 JSON。
+    "core.middleware.ExceptionHandlerMiddleware",
+]
 
 ROOT_URLCONF = "careplan_project.urls"
 WSGI_APPLICATION = "careplan_project.wsgi.application"
