@@ -1,0 +1,39 @@
+name: CI
+
+# 每次有人对 main 提 PR (以及推到 main 本身) 时触发。
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  backend-tests:
+    name: Backend tests (pytest)
+    runs-on: ubuntu-latest
+
+    # ANTHROPIC_API_KEY 在 CI 里用不到 (测试已 mock 掉 LLM), 给个空串
+    # 只是为了让 docker compose 的 ${ANTHROPIC_API_KEY} 插值不报 "variable not set" 警告。
+    env:
+      ANTHROPIC_API_KEY: ""
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 先把 backend 镜像 build 出来 (装好 pytest 等依赖)。
+      - name: Build backend image
+        run: docker compose build backend
+
+      # 1) 用 Docker 起 PostgreSQL, --wait 一直等到 healthcheck 通过才往下走。
+      - name: Start PostgreSQL
+        run: docker compose up -d --wait db
+
+      # 2) 跑 Django migration (对 dev 库 careplan 应用迁移; 同时也是一次迁移能否干净
+      #    应用的冒烟测试)。注: pytest-django 之后会自建 test_careplan 测试库并单独迁移。
+      - name: Run Django migrations
+        run: docker compose run --rm backend python manage.py migrate
+
+      # 3) 跑全部 pytest 测试。任一测试失败 -> 该 step 退出码非 0 -> job 失败 -> CI 红。
+      - name: Run pytest
+        run: docker compose run --rm backend pytest
