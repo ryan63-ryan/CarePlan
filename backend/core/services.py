@@ -140,7 +140,11 @@ def create_order(data, confirm=False):
     # ------------------------------------------------------------------
     # Order 重复检测 (同患者 + 同药物)。
     # ------------------------------------------------------------------
-    today = timezone.now().date()
+    # localdate() 取的是 TIME_ZONE (当前激活时区) 的今天, 和下面 created_at__date
+    # 查找的口径一致 (__date 也会把 created_at 转成 TIME_ZONE 再取日期)。
+    # 不能用 UTC 的当天日期去比 TIME_ZONE 的日期: 在 UTC 午夜后、本地午夜前的窗口里
+    # 两者差一天 -> 同日订单查不到, 误判成"不同天"。
+    today = timezone.localdate()
     same_day_order = Order.objects.filter(
         patient=patient,
         medication=data["medication"],
