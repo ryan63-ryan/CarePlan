@@ -4,6 +4,8 @@
 task、management command、测试任意复用。
 """
 import logging
+import re
+from datetime import datetime
 
 from django.conf import settings
 from django.utils import timezone
@@ -205,3 +207,130 @@ def get_care_plan(care_plan_id):
 def get_order(order_id):
     """按 id 取订单详情, 一次性带出关联对象。"""
     return Order.objects.select_related("patient", "provider", "care_plan").get(id=order_id)
+
+
+def create_order_from_clinic(clinic_data: dict):
+    """从诊所 JSON 格式接受订单, 翻译成后端字段后调用 create_order()。"""
+    # 1. 取 first_name
+    first_name = clinic_data["pt"]["fname"]
+    # 2. 取 last_name
+    last_name = clinic_data["pt"]["lname"]
+    # 3. 取 mrn
+    mrn = clinic_data["pt"]["mrn"]
+    # 4. 取 provider name
+    provider_name = clinic_data["provider"]["name"]
+    # 5. 取 npi
+    npi = clinic_data["provider"]["npi_num"]
+    # 6. 取 diagnosis (primary)
+    primary_diagnosis = clinic_data["dx"]["primary"]
+    # 7. 取 medication
+    medication = clinic_data["rx"]["med_name"]
+    # 8. 取 additional_diagnosis (secondary, list of ICD-10)
+    additional_diagnosis = clinic_data["dx"]["secondary"]
+    # 9. 取 medication_history (list of strings)
+    medication_history = clinic_data["med_hx"]
+    # 10. 取 patient_records
+    patient_records = clinic_data["clinical_notes"]
+
+    # 11. parse dob: "03/22/1985" (MM/DD/YYYY) -> date(1985, 3, 22)
+    dob = datetime.strptime(clinic_data["pt"]["dob"], "%m/%d/%Y").date()
+
+    # 12. 验证 npi 十位纯数字
+    if not (isinstance(npi, str) and npi.isdigit() and len(npi) == 10):
+        raise ValueError("invalid NPI %r: must be a 10-digit numeric string" % (npi,))
+
+    # 13. 验证 MRN 六位纯数字
+    if not (isinstance(mrn, str) and mrn.isdigit() and len(mrn) == 6):
+        raise ValueError("invalid MRN %r: must be a 6-digit numeric string" % (mrn,))
+
+    # 14. 验证 ICD-10 格式 (primary + 每个 secondary)
+    icd10_pattern = r"^[A-Z][0-9]{2}(\.[0-9A-Z]+)?$"
+    if not re.match(icd10_pattern, primary_diagnosis):
+        raise ValueError("invalid primary diagnosis ICD-10 %r" % (primary_diagnosis,))
+    for code in additional_diagnosis:
+        if not re.match(icd10_pattern, code):
+            raise ValueError("invalid additional diagnosis ICD-10 %r" % (code,))
+
+    # 15. 调用 create_order() 创建订单
+    data = {
+        "first_name": first_name,
+        "last_name": last_name,
+        "mrn": mrn,
+        "provider_name": provider_name,
+        "npi": npi,
+        "medication": medication,
+        "primary_diagnosis": primary_diagnosis,
+        "additional_diagnosis": additional_diagnosis,
+        "medication_history": medication_history,
+        "patient_records": patient_records,
+        "dob": dob,
+    }
+    return create_order(data)
+
+
+def create_order_from_pharma(pharma_data: dict):
+    """从药企 (XML 解析后的) dict 格式接受订单, 翻译成后端字段后调用 create_order()。
+
+    结构和诊所一致, 只是字段路径不同 —— 故意保留重复, 不抽公共函数 / 不用 Adapter。
+    """
+    # 1. 取 first_name
+    first_name = pharma_data["PatientInformation"]["PatientName"]["FirstName"]
+    # 2. 取 last_name
+    last_name = pharma_data["PatientInformation"]["PatientName"]["LastName"]
+    # 3. 取 mrn
+    mrn = pharma_data["PatientInformation"]["MedicalRecordNumber"]
+    # 4. 取 provider name
+    provider_name = pharma_data["PrescriberInformation"]["FullName"]
+    # 5. 取 npi
+    npi = pharma_data["PrescriberInformation"]["NPINumber"]
+    # 6. 取 diagnosis (primary)
+    primary_diagnosis = pharma_data["DiagnosisList"]["PrimaryDiagnosis"]["ICDCode"]
+    # 7. 取 medication
+    medication = pharma_data["MedicationOrder"]["DrugName"]
+    # 8. 取 additional_diagnosis (secondary, list of ICD-10)
+    additional_diagnosis = [
+        d["ICDCode"]
+        for d in pharma_data["DiagnosisList"]["SecondaryDiagnoses"]["Diagnosis"]
+    ]
+    # 9. 取 medication_history (把每条用药拼成字符串, 对齐诊所的 list-of-strings)
+    medication_history = [
+        "%s %s %s %s" % (m["MedicationName"], m["Dosage"], m["Route"], m["Frequency"])
+        for m in pharma_data["MedicationHistory"]["Medication"]
+    ]
+    # 10. 取 patient_records
+    patient_records = pharma_data["ClinicalDocumentation"]["NarrativeText"]
+
+    # 11. parse dob: "1972-11-30" (YYYY-MM-DD, ISO) -> date(1972, 11, 30)
+    dob = datetime.strptime(pharma_data["PatientInformation"]["DateOfBirth"], "%Y-%m-%d").date()
+
+    # 12. 验证 npi 十位纯数字
+    if not (isinstance(npi, str) and npi.isdigit() and len(npi) == 10):
+        raise ValueError("invalid NPI %r: must be a 10-digit numeric string" % (npi,))
+
+    # 13. 验证 MRN 六位纯数字
+    if not (isinstance(mrn, str) and mrn.isdigit() and len(mrn) == 6):
+        raise ValueError("invalid MRN %r: must be a 6-digit numeric string" % (mrn,))
+
+    # 14. 验证 ICD-10 格式 (primary + 每个 secondary)
+    icd10_pattern = r"^[A-Z][0-9]{2}(\.[0-9A-Z]+)?$"
+    if not re.match(icd10_pattern, primary_diagnosis):
+        raise ValueError("invalid primary diagnosis ICD-10 %r" % (primary_diagnosis,))
+    for code in additional_diagnosis:
+        if not re.match(icd10_pattern, code):
+            raise ValueError("invalid additional diagnosis ICD-10 %r" % (code,))
+
+    # 15. 调用 create_order() 创建订单
+    data = {
+        "first_name": first_name,
+        "last_name": last_name,
+        "mrn": mrn,
+        "provider_name": provider_name,
+        "npi": npi,
+        "medication": medication,
+        "primary_diagnosis": primary_diagnosis,
+        "additional_diagnosis": additional_diagnosis,
+        "medication_history": medication_history,
+        "patient_records": patient_records,
+        "dob": dob,
+    }
+    return create_order(data)
