@@ -163,3 +163,32 @@ class ClinicBAdapter(BaseIntakeAdapter):
         for code in order.diagnosis.additional:
             if not self._ICD10.match(code):
                 raise ValueError("invalid additional diagnosis ICD-10 %r" % (code,))
+
+
+# ----------------------------------------------------------------------
+# 工厂: source 字符串 -> Adapter 类。
+#
+# 新增数据源 = 写一个 BaseIntakeAdapter 子类 + 在这里登记一行, 业务代码
+# (services / view) 完全不动 —— 它们只调 get_adapter(source), 永远不认识
+# 任何具体 Adapter 类名。这就是 Open/Closed: 对扩展开放, 对修改封闭。
+# ----------------------------------------------------------------------
+_ADAPTERS: dict[str, type[BaseIntakeAdapter]] = {
+    ClinicBAdapter.source: ClinicBAdapter,
+    # 新来源在此登记, 例如:
+    #   PharmaAdapter.source: PharmaAdapter,
+}
+
+
+def get_adapter(source: str) -> type[BaseIntakeAdapter]:
+    """按来源标识返回对应的 Adapter 类 (不是实例)。
+
+    调用方拿到类后自己 new: get_adapter("clinic_b")(raw)。
+    未知来源抛 ValueError, 错误信息带上当前已注册的来源, 方便排查。
+    """
+    try:
+        return _ADAPTERS[source]
+    except KeyError:
+        known = ", ".join(sorted(_ADAPTERS)) or "(none)"
+        raise ValueError(
+            "unknown source %r; registered sources: %s" % (source, known)
+        )
