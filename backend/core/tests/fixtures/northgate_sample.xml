@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MedicationOrder orderId="NG-2026-558012" facility="Northgate Regional Hospital">
+  <Subject mrn="884412209">
+    <Name>OKONKWO^Adaeze^M</Name>          <!-- 姓^名^中间名缩写, ^ 分隔 (HL7 风格) -->
+    <BirthDate>19780914</BirthDate>         <!-- YYYYMMDD, 没有任何分隔符 -->
+    <Sex>F</Sex>
+  </Subject>
+  <OrderingClinician npi="1922011239">
+    <FullName>Dr. Marcus Webb</FullName>
+  </OrderingClinician>
+  <Drug>
+    <Label>Pyridostigmine Bromide</Label>
+    <NationalDrugCode>0008-0841-81</NationalDrugCode>
+    <Strength value="60" unit="mg"/>        <!-- 剂量被拆成两个属性 -->
+    <Sig>TID</Sig>                          <!-- 用药频率 (一天三次) -->
+  </Drug>
+  <Conditions>
+    <Condition rank="1" code="G70.00"/>     <!-- rank=1 是主诊断 -->
+    <Condition rank="2" code="E11.9"/>      <!-- rank>=2 是次要诊断 -->
+    <Condition rank="3" code="I10"/>
+  </Conditions>
+  <PriorMeds>
+    <Med>Prednisone 10mg</Med>
+    <Med>Azathioprine 50mg</Med>
+  </PriorMeds>
+  <ClinicalNarrative>Pt reports progressive ptosis and fatigue over 6 weeks.</ClinicalNarrative>
+</MedicationOrder>
