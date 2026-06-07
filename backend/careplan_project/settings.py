@@ -27,6 +27,7 @@ DATABASES = {
 TEMPLATES = []
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "anthropic")
 
 REDIS_HOST = os.environ.get("REDIS_HOST", "redis")
 REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
