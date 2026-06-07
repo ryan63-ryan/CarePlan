@@ -4,11 +4,15 @@ SECRET_KEY = "dev-only-not-secure"
 DEBUG = True
 ALLOWED_HOSTS = ["*"]
 
-INSTALLED_APPS = ["core"]
+INSTALLED_APPS = ["django_prometheus", "core"]
 MIDDLEWARE = [
+    # django-prometheus 靠 Before/After 一对中间件"包住"整个请求来测量延迟,
+    # 所以 Before 必须在最前、After 必须在最后, 中间夹住其它所有 middleware。
+    "django_prometheus.middleware.PrometheusBeforeMiddleware",
     "django.middleware.common.CommonMiddleware",
     # 统一异常处理 (Day 8): service/view 里 raise 的自定义异常在这里转成统一 JSON。
     "core.middleware.ExceptionHandlerMiddleware",
+    "django_prometheus.middleware.PrometheusAfterMiddleware",
 ]
 
 ROOT_URLCONF = "careplan_project.urls"

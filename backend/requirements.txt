@@ -3,6 +3,7 @@ anthropic==0.40.0
 psycopg2-binary==2.9.9
 redis==5.0.1
 celery==5.4.0
+django-prometheus==2.3.1
 
 # 测试 (Day 8 Part 3)
 pytest==8.3.4
